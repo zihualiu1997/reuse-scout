@@ -73,6 +73,22 @@ Use low confidence when search tools/network are unavailable, only one source wa
 
 With low confidence, do not recommend a strong from-scratch build. Recommend narrowing, verifying, or supplementary search.
 
+
+## Output Style
+
+Default to a concise, beginner-friendly answer. The first section must be a short plain-language conclusion, not a technical report.
+
+Structure final answers as:
+
+1. `先说结论`: 1-3 short paragraphs. Explain whether the idea is already mostly done, can be assembled from existing parts, or looks relatively new.
+2. `你下一步可以怎么做`: 2-4 concrete next steps.
+3. `可以直接复制给 LLM/Codex 的 Prompt`: a copyable prompt for the next implementation/research agent.
+4. `详细依据（可跳过）`: candidate table, search audit, confidence, risks, and technical details.
+
+Keep technical details out of the first section. Use beginner-friendly terms: “现成项目”, “可以直接改”, “可以当零件用”, “只适合参考”. If a technical term is necessary, explain it briefly, e.g. “fork（复制一份现有项目来改）”.
+
+Do not dump raw search matrices, debug counters, or long candidate lists into the user-facing summary. Put them in the optional details section.
+
 ## Report And References
 
 Use `references/report-template.md` for the final report shape and Codex handoff prompt.
@@ -81,7 +97,9 @@ Use `references/search-strategy.md` for high-recall search tactics, query templa
 
 Use `references/scoring-rubric.md` for candidate fields, reuse modes, and scoring labels.
 
-Use `references/examples.md` when you need realistic test cases or output calibration.`n`nUse `references/batch-review-template.md` when summarizing many reuse-scout test cases for human review; keep debug counters separate from review conclusions.
+Use `references/examples.md` when you need realistic test cases or output calibration.
+
+Use `references/batch-review-template.md` when summarizing many reuse-scout test cases for human review; keep debug counters separate from review conclusions.
 
 ## Anti-Hallucination Rules
 
