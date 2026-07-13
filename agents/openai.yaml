@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reuse Scout"
+  short_description: "Pre-build reuse research workflow"
+  default_prompt: "Use reuse-scout to research whether this project idea already has reusable projects, packages, templates, products, or skills, then produce a build-vs-reuse decision report and Codex handoff prompt."
