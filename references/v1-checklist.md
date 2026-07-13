@@ -1,4 +1,4 @@
-# V1 Research Checklist
+﻿# V1 Research Checklist
 
 Use this checklist for every reuse-scout report. It keeps the process decision-oriented while leaving room for domain judgment.
 
@@ -7,6 +7,24 @@ Use this checklist for every reuse-scout report. It keeps the process decision-o
 - State the user idea in one sentence.
 - Record assumptions when the user did not specify audience, form factor, deployment preference, license constraints, or budget.
 - Ask at most 3 clarifying questions only when the answer would materially change the search or decision.
+
+## 1.25 LLM Seed Discovery
+
+Before exact-match search and broad decomposition, ask an LLM for semantic expansion seeds.
+
+- Capture possible existing projects, products, templates, skills, and agent workflows.
+- Capture alternate names, SEO keywords, Chinese/English variants, adjacent categories, and competitor/alternative queries.
+- Mark all LLM-suggested candidates as unverified until inspected through GitHub, package registry, product page, README, docs, or official listing.
+- Never use an LLM claim that no similar project exists as evidence for `build_mvp`.
+
+## 1.5 Exact-Match / Seed Pass
+
+Before broad decomposition, check whether one existing project already covers the end-to-end job.
+
+- Search the user's original job-to-be-done as a complete phrase and as English/synonym/LLM-seeded variants.
+- Search the requested product form, especially `skill`, `agent`, `template`, `boilerplate`, `self-hosted`, or `SaaS` when relevant.
+- Verify any known candidate from the user, conversation memory, local docs, or prior examples.
+- If a candidate has about 70%+ end-to-end overlap, compare every custom/module route against it and prefer verify/fork/direct-use first.
 
 ## 2. Search Matrix
 
@@ -19,6 +37,7 @@ Create terms in these groups before searching:
 - Implementation terms.
 - Product alternative terms.
 - Skill/agent ecosystem terms when relevant.
+- Exact-match, known-seed, and LLM-seeded terms when there may be a whole product/project match.
 
 ## 3. Coverage Targets
 
@@ -71,5 +90,5 @@ Before finalizing, ensure the report includes:
 - Do-not-rebuild list.
 - MVP route.
 - Codex handoff prompt.
-- Search audit with sources, keywords, candidate counts, confidence, and unverified items.
+- Search audit with sources, keywords, LLM seed terms used, candidate counts, confidence, and unverified items.
 - No unsupported claim that nobody has built something.

@@ -1,4 +1,4 @@
-# Examples And Evaluation Cases
+﻿# Examples And Evaluation Cases
 
 Use these as forward-test prompts and output calibration cases.
 
@@ -40,3 +40,19 @@ Expected shape:
 - Likely decision: do not build a complete editor from scratch; reuse JSON Resume or markdown resume tooling and build the differentiated JD matching and rewrite workflow.
 - Handoff prompt should forbid rebuilding resume templates, PDF export, and basic editing unless existing candidates fail verification.
 - Search audit should note if broad GitHub searches returned noisy false positives such as config dumps or project-list repositories.
+
+
+## Regression Case: WeChat Chat Records -> Customer-Service Skill
+
+User idea: "我想创建一个 ai 客服的 skill，我通过上传微信的聊天记录，蒸馏出一个客服机器人用来回答常见的问题"
+
+Expected behavior:
+
+- Do not jump straight to a custom RAG architecture or a long list of modules.
+- Run LLM seed discovery first; it should surface or help search terms like `colleague skill`, `digital colleague`, `work skill`, `persona skill`, `chat history to chatbot`, `conversation distillation`, `微信聊天记录 客服机器人`.
+- Treat LLM output as seeds only; verify every named project through GitHub/README/docs before recommending it.
+- Search exact-match skill/agent/persona-generation terms before generic RAG terms.
+- Inspect or explicitly mark unavailable the seed candidate `https://github.com/titanwings/colleague-skill.git`.
+- If the seed candidate is available and roughly matches, likely decision: `fork_existing` or `pause_and_verify` first. The user should try/deploy/fork that project before building a new multi-module system.
+- Put generic RAG parts such as parsers, embeddings, vector DBs, FAQ extraction, and admin UI in the "only if the fork fails / later extension" bucket, not as the main route.
+- Handoff prompt should say: verify license/setup/data ingestion of `titanwings/colleague-skill`, run it on a small WeChat export sample, and only then decide what minimal adapters are needed.

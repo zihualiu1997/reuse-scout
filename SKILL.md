@@ -1,4 +1,4 @@
----
+﻿---
 name: reuse-scout
 description: Pre-build reuse research for vibecoding project ideas. Use when a user wants to build a new app, tool, automation, agent, plugin, website, or software project and needs to check whether existing open-source projects, packages, templates, SaaS products, or skills can be reused before coding. Produces a build-vs-reuse decision report, search audit, candidate scoring, do-not-rebuild list, MVP route, and Codex handoff prompt.
 ---
@@ -14,7 +14,7 @@ Default stance: oppose building from scratch unless research shows it is necessa
 Follow this sequence:
 
 ```text
-idea -> clarify -> decompose -> search matrix -> multi-source search -> candidate expansion -> scoring -> decision -> do-not-rebuild list -> MVP route -> Codex handoff prompt
+idea -> clarify -> decompose -> LLM seed discovery -> search matrix -> multi-source search -> candidate expansion -> scoring -> decision -> do-not-rebuild list -> MVP route -> Codex handoff prompt
 ```
 
 Ask at most 3 clarifying questions when the idea is too vague. Prioritize target user, desired product form, and reuse constraints such as open-source, local-first, SaaS allowed, or deployment preference. If the user does not answer, continue with explicit assumptions.
@@ -23,13 +23,33 @@ For V1/V2 execution, use `references/v1-checklist.md` to keep the research compl
 
 ## Required Behavior
 
-- Do not search only the user's original wording. First generate a search matrix with original terms, English terms, synonyms, parent categories, adjacent categories, module terms, implementation terms, and product alternative terms.
+### LLM Seed Discovery
+
+Before formal external search, run an LLM-assisted seed discovery pass. Ask the model to propose possible existing projects, product names, community terms, SEO keywords, adjacent category names, competitor names, and exact search queries that might describe the same idea.
+
+Treat this output only as search seed material, not evidence. Every LLM-suggested project, package, product, or repo must be verified through an inspectable source such as GitHub, a package registry, product page, README, docs, or official listing before it appears as a scored candidate or recommendation.
+
+If the LLM seed pass says no similar project is known, do not use that as proof of novelty. Continue external search and report only the verified search scope.
+
+### High-Overlap Candidate First
+
+Before decomposing the idea into modules, actively look for a nearly identical existing project, skill, template, or product. If one is found, make it the center of the report and compare all module/composition routes against it. Do not bury an exact-match candidate inside a long module list.
+
+Use a complexity brake: when a candidate covers the user's end-to-end job at roughly 70%+ overlap, the default recommendation should be `fork_existing`, `direct_use`, or `pause_and_verify`, not a large custom architecture. Only recommend `compose_modules` or `build_mvp` after explaining why the high-overlap candidate is unsuitable.
+
+When the idea is about creating a skill/agent from source materials such as chat logs, docs, transcripts, interviews, writing samples, or human work records, always search the skill/agent/persona-distilled-project space explicitly before generic chatbot/RAG modules. Include terms such as: `colleague skill`, `digital colleague`, `persona skill`, `work skill`, `chat logs to chatbot`, `conversation distillation`, `AI employee clone`, `customer service skill`, and `skill from source materials`.
+
+If the user mentions or the conversation context contains a known potentially matching candidate, treat it as a seed candidate: inspect/verify it first, search its alternatives, and include it in the final report unless it is clearly irrelevant.
+
+
+- Do not search only the user's original wording. First run LLM seed discovery, then generate a search matrix with original terms, English terms, synonyms, parent categories, adjacent categories, module terms, implementation terms, product alternative terms, and LLM-seeded terms.
 - Search both full-project candidates and reusable module/package candidates.
 - Prefer high-recall search over quick single-source search. Use GitHub plus at least one package/model/product ecosystem when tools allow.
 - If full-project candidates are fewer than 3 or module candidates are fewer than 5, expand keywords and search again before making a decision.
 - After finding a strong candidate, expand through its README, topics, dependencies, related projects, forks, alternatives, and referenced competitors when available.
 - Filter search noise before scoring. Exclude obvious false positives, copied-description spam, unrelated repositories with keyword-stuffed descriptions, and results whose actual repository purpose does not match the query.
 - Cluster results by reuse role rather than presenting a flat link list.
+- Highlight exact/high-overlap complete projects before lower-level modules. The first recommendation must answer: "Can I directly deploy/fork one existing thing instead of assembling many parts?"
 - Produce a decision report, not a directory of links.
 - Include search scope, uncovered sources, confidence, and unverified items.
 - Never claim that nobody has built something. Say only what was or was not found in the current search scope.
@@ -103,7 +123,7 @@ Use `references/batch-review-template.md` when summarizing many reuse-scout test
 
 ## Anti-Hallucination Rules
 
-Do not invent candidates, metrics, license details, maintenance state, or installation status. If a field is unknown, mark it `unknown_needs_verification`.
+Do not invent candidates, metrics, license details, maintenance state, or installation status. If a field is unknown, mark it `unknown_needs_verification`. LLM-suggested candidates are unverified seeds until confirmed through an inspectable source.
 
 Forbidden phrases:
 
