@@ -11,7 +11,13 @@ Do not expose the full research process unless it matters. Avoid long tables in 
 
 ## 先说结论
 
-{用 1-3 段短话说明结果。不要堆术语。根据实际情况选择下面三种表达之一。}
+{用 1-3 段短话说明结果。不要堆术语。根据实际情况选择下面四种表达之一。}
+
+### 情况 D：关键搜索没有完成
+
+{目标候选类型} 的关键来源 {来源} 因 {限流/认证/网络问题} 没有完成搜索。{其他已完成来源} 不能替代这个候选空间，所以本轮无法判断是否已有现成的 {skill/项目/产品}。
+
+我的建议：先暂停“从零开发”判断。使用认证搜索或备用渠道完成 {来源} 的专项查询，再决定是直接复用、组合模块还是做 MVP。
 
 ### 情况 A：已经有人做得很像
 
@@ -69,8 +75,11 @@ Do not expose the full research process unless it matters. Avoid long tables in 
 
 ### 搜索范围
 
-- 搜过：{GitHub / npm / PyPI / Hugging Face / 产品替代站 / 其他}
-- 没搜或没搜充分：{未覆盖来源}
+- 完成：{来源，以及完成 query 数}
+- 部分完成：{来源，成功/总 query 数，失败原因}
+- 未执行或跳过：{来源或 query，原因}
+- 目标候选的必要来源：{来源}
+- 是否允许下“未发现”结论：是 / 否
 - 置信度：高 / 中 / 低
 
 ### 候选对比
@@ -99,4 +108,5 @@ Do not expose the full research process unless it matters. Avoid long tables in 
 - Use words like “现成项目”, “可以直接改”, “可以当零件用”, “只适合参考” instead of unexplained technical labels like fork, SDK, boilerplate, registry.
 - If using a technical word, add a short explanation: “fork（复制一份现有项目来改）”.
 - Put all noisy details in “详细依据（可跳过）”.
+- When a required source is incomplete, use 情况 D. Do not use 情况 B/C or say “未找到现成项目”.
 - Always include a copyable LLM/Codex prompt before the optional details section.

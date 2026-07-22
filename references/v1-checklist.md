@@ -1,4 +1,4 @@
-﻿# V1 Research Checklist
+# V1 Research Checklist
 
 Use this checklist for every reuse-scout report. It keeps the process decision-oriented while leaving room for domain judgment.
 
@@ -51,6 +51,12 @@ Unless the user requests a quick pass, attempt:
 
 If sources are unavailable, record that in the search audit.
 
+- Define at least one required source for each target candidate type when a negative finding would affect the recommendation.
+- Run exact-match, known-seed, and target-type queries before broad module queries.
+- Use authenticated GitHub search when available; otherwise set a conservative query budget.
+- Distinguish completed empty searches from rate-limited, authentication, network, and skipped states.
+- If a required source is incomplete, mark that candidate-type result inconclusive and use low confidence.
+
 ## 4. Candidate Hygiene
 
 - Exclude copied-description noise, config dumps, broad project-list repos, dotfiles, and keyword-stuffed false positives.
@@ -83,6 +89,8 @@ Choose one primary recommendation:
 
 Prefer `pause_and_narrow` or more search when confidence is low.
 
+Use `pause_and_narrow` when required-source coverage is incomplete. Other successful sources do not override this gate.
+
 ## 7. Final Checks
 
 Before finalizing, ensure the report includes:
@@ -91,4 +99,6 @@ Before finalizing, ensure the report includes:
 - MVP route.
 - Codex handoff prompt.
 - Search audit with sources, keywords, LLM seed terms used, candidate counts, confidence, and unverified items.
+- Search audit separates attempted, completed, partial, failed, and skipped coverage.
+- A negative finding appears only when required-source searches completed successfully, including valid zero-result responses.
 - No unsupported claim that nobody has built something.

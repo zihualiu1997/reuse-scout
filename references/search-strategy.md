@@ -1,4 +1,4 @@
-﻿# Search Strategy
+# Search Strategy
 
 Search success is the core capability. Do not treat this as a single GitHub search. Use high-recall, multi-round search.
 
@@ -123,7 +123,13 @@ If this pass finds an end-to-end candidate, inspect it before continuing. It may
 When available, use `scripts/reuse_scout_search.py` to gather first-pass candidate evidence:
 
 ```bash
-python scripts/reuse_scout_search.py --query "open source resume builder AI optimizer" --query "ATS resume checker open source" --format markdown
+python scripts/reuse_scout_search.py \
+  --github-query "Codex resume skill" \
+  --github-query "Claude resume skill" \
+  --query "open source resume builder AI optimizer" \
+  --required-source github \
+  --github-query-budget 6 \
+  --format markdown
 ```
 
 Supported sources in V2:
@@ -134,7 +140,45 @@ Supported sources in V2:
 
 The script does not replace judgment. After running it, still inspect high-value candidates, expand around strong candidates, and apply the scoring rubric.
 
-Use `GITHUB_TOKEN` when available to reduce GitHub API rate-limit risk. Without a token, the script should still run but may hit stricter limits.
+Use `GITHUB_TOKEN` or `GH_TOKEN` when available to reduce GitHub API rate-limit risk. Never print the token. Without a token, keep the GitHub query budget conservative and put exact-match and target-type queries in `--github-query` so they run before shared queries.
+
+The script reports query-level states instead of collapsing failures into empty results:
+
+```text
+results
+empty
+rate_limited
+auth_failed
+network_failed
+http_error
+invalid_response
+skipped_rate_limited
+skipped_budget
+```
+
+Only `results` and `empty` count as completed searches. If a `--required-source` has any failed or skipped query, `claim_allowed` is false and the report must not make a negative finding for that candidate type.
+
+## GitHub Query Order And Recovery
+
+Use this order so scarce search quota is spent on the highest-value checks:
+
+1. Directly verify user-provided or LLM-seeded repository URLs.
+2. Run exact-match project, skill, template, and product queries.
+3. Run Codex/Claude/agent/skill ecosystem queries when relevant.
+4. Run complete-project queries.
+5. Run broad module and adjacent-category queries.
+
+Route queries only to sources that can answer them. npm and Hugging Face can validate packages or models, but they do not replace GitHub or a skill directory when the target is an existing Codex/Claude skill.
+
+If GitHub search is rate-limited:
+
+1. Stop further GitHub API requests and record the remaining queries as skipped.
+2. Retry with authenticated GitHub search when authorization is available.
+3. Use web queries such as `site:github.com SKILL.md {domain}`, GitHub web search, skill directories, and relevant awesome lists.
+4. Directly inspect known repository URLs through their README/docs or a shallow clone when available.
+5. If required coverage remains incomplete, return an inconclusive result with low confidence and `pause_and_narrow`.
+
+Cache or reuse recent query evidence when the execution environment supports it. Deduplicate semantically equivalent queries before spending API quota.
 
 ## Query Templates
 
@@ -265,5 +309,7 @@ For strong candidates, search:
 - For Chinese-market ideas, search Chinese terms, English terms, and brand/community terms such as pinyin or international names.
 - For skill/agent-building ideas, search skill/agent/persona terms before generic app/RAG terms. A skill-generation project can be a better match than a chatbot framework.
 - If a known seed candidate is available from context or LLM seed discovery, include it in the exact-match pass even if ordinary keyword search did not surface it.
+- Define the required discovery source for the target candidate type. If that source is incomplete, do not convert missing candidates into a negative finding.
+- Report source states as completed, partial, failed, or skipped. "Attempted" is not equivalent to "covered".
 - If candidate counts remain low, state that scarcity in the current search scope does not prove an ecosystem gap.
 

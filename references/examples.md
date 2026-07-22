@@ -1,4 +1,4 @@
-﻿# Examples And Evaluation Cases
+# Examples And Evaluation Cases
 
 Use these as forward-test prompts and output calibration cases.
 
@@ -53,6 +53,23 @@ Expected behavior:
 - Treat LLM output as seeds only; verify every named project through GitHub/README/docs before recommending it.
 - Search exact-match skill/agent/persona-generation terms before generic RAG terms.
 - Inspect or explicitly mark unavailable the seed candidate `https://github.com/titanwings/colleague-skill.git`.
-- If the seed candidate is available and roughly matches, likely decision: `fork_existing` or `pause_and_verify` first. The user should try/deploy/fork that project before building a new multi-module system.
+- If the seed candidate is available and roughly matches, likely decision: `fork_existing` or `pause_and_narrow` first. The user should try/deploy/fork that project before building a new multi-module system.
 - Put generic RAG parts such as parsers, embeddings, vector DBs, FAQ extraction, and admin UI in the "only if the fork fails / later extension" bucket, not as the main route.
 - Handoff prompt should say: verify license/setup/data ingestion of `titanwings/colleague-skill`, run it on a small WeChat export sample, and only then decide what minimal adapters are needed.
+
+## Regression Case: Required Skill Search Is Rate-Limited
+
+Observed search state:
+
+- npm and Hugging Face queries complete.
+- Product documentation is inspected.
+- GitHub general queries partly complete.
+- Codex/Claude skill-specific GitHub queries hit an anonymous API rate limit.
+
+Expected behavior:
+
+- Do not say "no existing skill was found", even with a current-search-scope caveat.
+- State that the skill-specific search is incomplete and the result is inconclusive.
+- Explain that npm, Hugging Face, and product documentation do not replace GitHub/skill-ecosystem coverage.
+- Assign low confidence and choose `pause_and_narrow` until authenticated GitHub search or fallback discovery completes.
+- Preserve the failed and skipped queries so a later run can resume them.

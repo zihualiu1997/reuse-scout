@@ -1,4 +1,4 @@
-﻿---
+---
 name: reuse-scout
 description: Pre-build reuse research for vibecoding project ideas. Use when a user wants to build a new app, tool, automation, agent, plugin, website, or software project and needs to check whether existing open-source projects, packages, templates, SaaS products, or skills can be reused before coding. Produces a build-vs-reuse decision report, search audit, candidate scoring, do-not-rebuild list, MVP route, and Codex handoff prompt.
 ---
@@ -19,7 +19,7 @@ idea -> clarify -> decompose -> LLM seed discovery -> search matrix -> multi-sou
 
 Ask at most 3 clarifying questions when the idea is too vague. Prioritize target user, desired product form, and reuse constraints such as open-source, local-first, SaaS allowed, or deployment preference. If the user does not answer, continue with explicit assumptions.
 
-For V1/V2 execution, use `references/v1-checklist.md` to keep the research complete and auditable. When network access is available and the task benefits from structured search, run `scripts/reuse_scout_search.py` with the search matrix terms to collect initial candidates. Treat script output as evidence to inspect, not as the final answer.
+For V1/V2 execution, use `references/v1-checklist.md` to keep the research complete and auditable. When network access is available and the task benefits from structured search, run `scripts/reuse_scout_search.py` with source-specific priority queries and required-source gates to collect initial candidates. Treat script output as evidence to inspect, not as the final answer.
 
 ## Required Behavior
 
@@ -35,11 +35,19 @@ If the LLM seed pass says no similar project is known, do not use that as proof 
 
 Before decomposing the idea into modules, actively look for a nearly identical existing project, skill, template, or product. If one is found, make it the center of the report and compare all module/composition routes against it. Do not bury an exact-match candidate inside a long module list.
 
-Use a complexity brake: when a candidate covers the user's end-to-end job at roughly 70%+ overlap, the default recommendation should be `fork_existing`, `direct_use`, or `pause_and_verify`, not a large custom architecture. Only recommend `compose_modules` or `build_mvp` after explaining why the high-overlap candidate is unsuitable.
+Use a complexity brake: when a candidate covers the user's end-to-end job at roughly 70%+ overlap, the default recommendation should be `fork_existing`, `direct_use`, or `pause_and_narrow`, not a large custom architecture. Only recommend `compose_modules` or `build_mvp` after explaining why the high-overlap candidate is unsuitable.
 
 When the idea is about creating a skill/agent from source materials such as chat logs, docs, transcripts, interviews, writing samples, or human work records, always search the skill/agent/persona-distilled-project space explicitly before generic chatbot/RAG modules. Include terms such as: `colleague skill`, `digital colleague`, `persona skill`, `work skill`, `chat logs to chatbot`, `conversation distillation`, `AI employee clone`, `customer service skill`, and `skill from source materials`.
 
 If the user mentions or the conversation context contains a known potentially matching candidate, treat it as a seed candidate: inspect/verify it first, search its alternatives, and include it in the final report unless it is clearly irrelevant.
+
+### Search Completion Gate
+
+Define which source is required to discover each target candidate type before searching. GitHub or an equivalent inspectable skill ecosystem is normally required for Codex/Claude skills; npm, Hugging Face, and product documentation do not substitute for that coverage.
+
+Keep a completed `empty` result separate from `rate_limited`, `auth_failed`, `network_failed`, and skipped queries. If a required source is incomplete, the result is inconclusive for that candidate type. Do not write "no existing skill/project was found"; say the specialized search did not complete, assign low confidence, and choose `pause_and_narrow` or supplementary search.
+
+Run exact-match, known-seed, and target-type queries before broad module queries. When GitHub is anonymous, use a conservative query budget. If it becomes limited, stop further API requests, preserve unexecuted queries, and try authenticated search, web search, skill directories, or direct verification of known repository URLs.
 
 
 - Do not search only the user's original wording. First run LLM seed discovery, then generate a search matrix with original terms, English terms, synonyms, parent categories, adjacent categories, module terms, implementation terms, product alternative terms, and LLM-seeded terms.
@@ -52,6 +60,7 @@ If the user mentions or the conversation context contains a known potentially ma
 - Highlight exact/high-overlap complete projects before lower-level modules. The first recommendation must answer: "Can I directly deploy/fork one existing thing instead of assembling many parts?"
 - Produce a decision report, not a directory of links.
 - Include search scope, uncovered sources, confidence, and unverified items.
+- Report attempted, completed, incomplete, and skipped source coverage separately. Do not describe an attempted but failed source as covered.
 - Never claim that nobody has built something. Say only what was or was not found in the current search scope.
 
 ## Reuse Decisions
@@ -93,6 +102,8 @@ Use low confidence when search tools/network are unavailable, only one source wa
 
 With low confidence, do not recommend a strong from-scratch build. Recommend narrowing, verifying, or supplementary search.
 
+An incomplete required source always forces low confidence for that candidate type, even if unrelated sources completed successfully.
+
 
 ## Output Style
 
@@ -131,6 +142,7 @@ Forbidden phrases:
 - "No similar project exists"
 - "This is a blank market"
 - "The only option is to build from scratch"
+- "No existing skill/project was found" when a required search source was incomplete
 - "This is definitely suitable to fork" when it has not been verified
 
 Preferred phrases:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Structured public-source search helper for the reuse-scout skill.
+"""Collect first-pass reuse candidates from public APIs.
 
-This dependency-free helper gathers first-pass candidate evidence from public
-APIs, filters obvious search noise, deduplicates URLs, and emits JSON or
-Markdown for the agent to inspect. It is not a ranking oracle.
+The helper keeps successful empty searches distinct from incomplete searches so
+downstream agents do not turn rate limits or network failures into negative
+findings.
 """
 from __future__ import annotations
 
@@ -12,15 +12,17 @@ import json
 import os
 import re
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
-USER_AGENT = "reuse-scout/0.2"
+USER_AGENT = "reuse-scout/0.3"
 DEFAULT_TIMEOUT = 20
+SUCCESS_STATUSES = {"results", "empty"}
+SKIPPED_STATUSES = {"skipped_rate_limited", "skipped_budget"}
 NOISE_PATTERNS = [
     r"skip to content",
     r"showing \d+ changed files",
@@ -32,6 +34,7 @@ NOISE_PATTERNS = [
     r"config_package_",
     r"mega project list",
 ]
+
 
 @dataclass
 class Candidate:
@@ -51,7 +54,51 @@ class Candidate:
     query: str = ""
 
 
-def http_json(url: str, token: str | None = None) -> tuple[Any | None, str | None]:
+@dataclass
+class HttpResult:
+    data: Any | None
+    status: str
+    error: str | None = None
+    status_code: int | None = None
+    rate_limit_remaining: str | None = None
+    rate_limit_reset: str | None = None
+    retry_after: str | None = None
+
+
+@dataclass
+class QueryOutcome:
+    source: str
+    query: str
+    status: str
+    candidate_count: int = 0
+    error: str | None = None
+    status_code: int | None = None
+    rate_limit_remaining: str | None = None
+    rate_limit_reset: str | None = None
+    retry_after: str | None = None
+
+
+def header_value(headers: Mapping[str, str] | Any, name: str) -> str | None:
+    if not headers:
+        return None
+    value = headers.get(name) or headers.get(name.lower())
+    return str(value) if value is not None else None
+
+
+def classify_http_failure(status_code: int, body: str, headers: Mapping[str, str] | Any) -> str:
+    remaining = header_value(headers, "X-RateLimit-Remaining")
+    body_lower = body.lower()
+    if status_code == 429 or (
+        status_code == 403
+        and (remaining == "0" or "rate limit" in body_lower or "secondary rate" in body_lower)
+    ):
+        return "rate_limited"
+    if status_code in {401, 403}:
+        return "auth_failed"
+    return "http_error"
+
+
+def http_json(url: str, token: str | None = None) -> HttpResult:
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -59,12 +106,40 @@ def http_json(url: str, token: str | None = None) -> tuple[Any | None, str | Non
     try:
         with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT) as response:
             raw = response.read().decode("utf-8", errors="replace")
-            return json.loads(raw), None
+            response_headers = response.headers
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                return HttpResult(
+                    data=None,
+                    status="invalid_response",
+                    error=f"JSONDecodeError: {exc}",
+                    status_code=getattr(response, "status", None),
+                )
+            return HttpResult(
+                data=data,
+                status="ok",
+                status_code=getattr(response, "status", 200),
+                rate_limit_remaining=header_value(response_headers, "X-RateLimit-Remaining"),
+                rate_limit_reset=header_value(response_headers, "X-RateLimit-Reset"),
+                retry_after=header_value(response_headers, "Retry-After"),
+            )
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
-        return None, f"HTTP {exc.code}: {body}"
+        status = classify_http_failure(exc.code, body, exc.headers)
+        return HttpResult(
+            data=None,
+            status=status,
+            error=f"HTTP {exc.code}: {body}",
+            status_code=exc.code,
+            rate_limit_remaining=header_value(exc.headers, "X-RateLimit-Remaining"),
+            rate_limit_reset=header_value(exc.headers, "X-RateLimit-Reset"),
+            retry_after=header_value(exc.headers, "Retry-After"),
+        )
+    except urllib.error.URLError as exc:
+        return HttpResult(data=None, status="network_failed", error=f"URLError: {exc.reason}")
     except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
+        return HttpResult(data=None, status="network_failed", error=f"{type(exc).__name__}: {exc}")
 
 
 def compact_text(value: str | None, limit: int = 500) -> str:
@@ -98,10 +173,7 @@ def hygiene_notes(name: str, description: str, topics: Iterable[str] = (), query
 def classify_from_text(name: str, description: str, topics: Iterable[str] = ()) -> str:
     name_desc = " ".join([name, description]).lower()
     text = " ".join([name, description, " ".join(topics)]).lower()
-    # Treat awesome/list signals in the project name or description as a directory.
-    # Do not classify a normal project as a directory only because it has topics
-    # such as awesome-ai-tools or awesome-resumes.
-    if "awesome" in name_desc or "curated" in name_desc or re.search(r"\\blist\\b", name_desc):
+    if "awesome" in name_desc or "curated" in name_desc or re.search(r"\blist\b", name_desc):
         return "curated_directory"
     if "template" in name.lower() or "boilerplate" in name.lower():
         return "template"
@@ -114,13 +186,29 @@ def classify_from_text(name: str, description: str, topics: Iterable[str] = ()) 
     return "complete_or_reference_project"
 
 
-def search_github(query: str, limit: int, token: str | None) -> tuple[list[Candidate], str | None]:
+def outcome_from_http(source: str, query: str, result: HttpResult) -> QueryOutcome:
+    return QueryOutcome(
+        source=source,
+        query=query,
+        status=result.status,
+        error=result.error,
+        status_code=result.status_code,
+        rate_limit_remaining=result.rate_limit_remaining,
+        rate_limit_reset=result.rate_limit_reset,
+        retry_after=result.retry_after,
+    )
+
+
+def search_github(query: str, limit: int, token: str | None) -> tuple[list[Candidate], QueryOutcome]:
     params = urllib.parse.urlencode({"q": query, "sort": "stars", "order": "desc", "per_page": limit})
-    data, error = http_json(f"https://api.github.com/search/repositories?{params}", token=token)
-    if error:
-        return [], error
+    result = http_json(f"https://api.github.com/search/repositories?{params}", token=token)
+    if result.status != "ok":
+        return [], outcome_from_http("github", query, result)
+    if not isinstance(result.data, dict):
+        return [], QueryOutcome("github", query, "invalid_response", error="expected JSON object")
+
     candidates: list[Candidate] = []
-    for item in data.get("items", []) if isinstance(data, dict) else []:
+    for item in result.data.get("items", []):
         topics = item.get("topics") or []
         desc = compact_text(item.get("description"))
         notes = hygiene_notes(item.get("full_name", ""), desc, topics, query)
@@ -139,16 +227,29 @@ def search_github(query: str, limit: int, token: str | None) -> tuple[list[Candi
             hygiene_notes=notes,
             query=query,
         ))
-    return candidates, None
+    status = "results" if candidates else "empty"
+    return candidates, QueryOutcome(
+        "github",
+        query,
+        status,
+        candidate_count=len(candidates),
+        status_code=result.status_code,
+        rate_limit_remaining=result.rate_limit_remaining,
+        rate_limit_reset=result.rate_limit_reset,
+        retry_after=result.retry_after,
+    )
 
 
-def search_npm(query: str, limit: int) -> tuple[list[Candidate], str | None]:
+def search_npm(query: str, limit: int) -> tuple[list[Candidate], QueryOutcome]:
     params = urllib.parse.urlencode({"text": query, "size": limit})
-    data, error = http_json(f"https://registry.npmjs.org/-/v1/search?{params}")
-    if error:
-        return [], error
+    result = http_json(f"https://registry.npmjs.org/-/v1/search?{params}")
+    if result.status != "ok":
+        return [], outcome_from_http("npm", query, result)
+    if not isinstance(result.data, dict):
+        return [], QueryOutcome("npm", query, "invalid_response", error="expected JSON object")
+
     candidates: list[Candidate] = []
-    for obj in data.get("objects", []) if isinstance(data, dict) else []:
+    for obj in result.data.get("objects", []):
         package = obj.get("package") or {}
         links = package.get("links") or {}
         desc = compact_text(package.get("description"))
@@ -169,18 +270,20 @@ def search_npm(query: str, limit: int) -> tuple[list[Candidate], str | None]:
             hygiene_notes=notes,
             query=query,
         ))
-    return candidates, None
+    status = "results" if candidates else "empty"
+    return candidates, QueryOutcome("npm", query, status, candidate_count=len(candidates))
 
 
-def search_huggingface(query: str, limit: int) -> tuple[list[Candidate], str | None]:
+def search_huggingface(query: str, limit: int) -> tuple[list[Candidate], QueryOutcome]:
     params = urllib.parse.urlencode({"search": query, "limit": limit})
-    data, error = http_json(f"https://huggingface.co/api/models?{params}")
-    if error:
-        return [], error
+    result = http_json(f"https://huggingface.co/api/models?{params}")
+    if result.status != "ok":
+        return [], outcome_from_http("huggingface", query, result)
+    if not isinstance(result.data, list):
+        return [], QueryOutcome("huggingface", query, "invalid_response", error="expected JSON list")
+
     candidates: list[Candidate] = []
-    if not isinstance(data, list):
-        return candidates, None
-    for item in data:
+    for item in result.data:
         model_id = item.get("modelId") or item.get("id") or "unknown"
         tags = item.get("tags") or []
         desc = compact_text(" ".join(tags[:12]))
@@ -198,7 +301,8 @@ def search_huggingface(query: str, limit: int) -> tuple[list[Candidate], str | N
             hygiene_notes=notes,
             query=query,
         ))
-    return candidates, None
+    status = "results" if candidates else "empty"
+    return candidates, QueryOutcome("huggingface", query, status, candidate_count=len(candidates))
 
 
 def dedupe(candidates: Iterable[Candidate]) -> list[Candidate]:
@@ -209,8 +313,6 @@ def dedupe(candidates: Iterable[Candidate]) -> list[Candidate]:
         if existing is None:
             by_key[key] = candidate
             continue
-        # Prefer a kept candidate over a filtered duplicate. The same project can
-        # be weak for one broad query and strong for another module query.
         if existing.hygiene_status != "kept" and candidate.hygiene_status == "kept":
             by_key[key] = candidate
             continue
@@ -219,73 +321,202 @@ def dedupe(candidates: Iterable[Candidate]) -> list[Candidate]:
     return list(by_key.values())
 
 
-def run_search(queries: list[str], sources: list[str], limit: int) -> dict[str, Any]:
-    token = os.environ.get("GITHUB_TOKEN")
+def dedupe_strings(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = value.strip()
+        key = normalized.casefold()
+        if normalized and key not in seen:
+            seen.add(key)
+            result.append(normalized)
+    return result
+
+
+def github_token() -> str | None:
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+
+def summarize_sources(sources: list[str], query_map: dict[str, list[str]], outcomes: list[QueryOutcome]) -> dict[str, dict[str, Any]]:
+    summary: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        source_outcomes = [outcome for outcome in outcomes if outcome.source == source]
+        counts = Counter(outcome.status for outcome in source_outcomes)
+        assigned = len(query_map.get(source, []))
+        completed = sum(counts[status] for status in SUCCESS_STATUSES)
+        skipped = sum(counts[status] for status in SKIPPED_STATUSES)
+        failed = assigned - completed - skipped
+        summary[source] = {
+            "assigned": assigned,
+            "completed": completed,
+            "with_results": counts["results"],
+            "empty": counts["empty"],
+            "failed": max(0, failed),
+            "skipped": skipped,
+            "coverage_complete": assigned > 0 and completed == assigned,
+            "statuses": dict(counts),
+        }
+    return summary
+
+
+def run_search(
+    queries: list[str],
+    sources: list[str],
+    limit: int,
+    source_queries: dict[str, list[str]] | None = None,
+    required_sources: list[str] | None = None,
+    github_query_budget: int | None = None,
+) -> dict[str, Any]:
+    source_queries = source_queries or {}
+    required_sources = dedupe_strings(required_sources or [])
+    shared_queries = dedupe_strings(queries)
+    query_map = {
+        source: dedupe_strings([*source_queries.get(source, []), *shared_queries])
+        for source in sources
+    }
+
+    token = github_token()
     all_candidates: list[Candidate] = []
-    failures: list[dict[str, str]] = []
-    for query in queries:
-        if "github" in sources:
-            candidates, error = search_github(query, limit, token)
+    outcomes: list[QueryOutcome] = []
+    github_attempts = 0
+    github_blocked = False
+
+    for source in sources:
+        for query in query_map[source]:
+            if source == "github" and github_blocked:
+                outcomes.append(QueryOutcome("github", query, "skipped_rate_limited"))
+                continue
+            if source == "github" and github_query_budget is not None and github_attempts >= github_query_budget:
+                outcomes.append(QueryOutcome("github", query, "skipped_budget"))
+                continue
+
+            if source == "github":
+                github_attempts += 1
+                candidates, outcome = search_github(query, limit, token)
+                if outcome.status == "rate_limited":
+                    github_blocked = True
+            elif source == "npm":
+                candidates, outcome = search_npm(query, limit)
+            elif source == "huggingface":
+                candidates, outcome = search_huggingface(query, limit)
+            else:
+                candidates = []
+                outcome = QueryOutcome(source, query, "unsupported_source", error="unsupported source")
+
             all_candidates.extend(candidates)
-            if error:
-                failures.append({"source": "github", "query": query, "error": error})
-        if "npm" in sources:
-            candidates, error = search_npm(query, limit)
-            all_candidates.extend(candidates)
-            if error:
-                failures.append({"source": "npm", "query": query, "error": error})
-        if "huggingface" in sources:
-            candidates, error = search_huggingface(query, limit)
-            all_candidates.extend(candidates)
-            if error:
-                failures.append({"source": "huggingface", "query": query, "error": error})
-        time.sleep(0.1)
+            outcomes.append(outcome)
+
     unique = dedupe(all_candidates)
-    kept = [c for c in unique if c.hygiene_status == "kept"]
-    filtered = [c for c in unique if c.hygiene_status != "kept"]
+    kept = [candidate for candidate in unique if candidate.hygiene_status == "kept"]
+    filtered = [candidate for candidate in unique if candidate.hygiene_status != "kept"]
+    source_summary = summarize_sources(sources, query_map, outcomes)
+    coverage_complete = bool(sources) and all(source_summary[source]["coverage_complete"] for source in sources)
+    required_coverage_complete = all(
+        source in source_summary and source_summary[source]["coverage_complete"]
+        for source in required_sources
+    )
+    claim_allowed = coverage_complete if not required_sources else required_coverage_complete
+    incomplete_required_sources = [
+        source for source in required_sources
+        if source not in source_summary or not source_summary[source]["coverage_complete"]
+    ]
+    failures = [
+        asdict(outcome) for outcome in outcomes
+        if outcome.status not in SUCCESS_STATUSES
+    ]
+
     return {
-        "queries": queries,
+        "queries": shared_queries,
+        "source_queries": source_queries,
         "sources": sources,
+        "requested_sources": sources,
+        "successful_sources": [source for source in sources if source_summary[source]["completed"] > 0],
+        "incomplete_sources": [source for source in sources if not source_summary[source]["coverage_complete"]],
+        "source_summary": source_summary,
+        "coverage_complete": coverage_complete,
+        "required_sources": required_sources,
+        "claim_allowed": claim_allowed,
+        "incomplete_required_sources": incomplete_required_sources,
+        "github_auth": "token" if token else "anonymous",
         "candidate_count": len(unique),
         "kept_count": len(kept),
         "filtered_noise_count": len(filtered),
         "failures": failures,
-        "candidates": [asdict(c) for c in kept],
-        "filtered_noise": [asdict(c) for c in filtered[:25]],
+        "query_outcomes": [asdict(outcome) for outcome in outcomes],
+        "candidates": [asdict(candidate) for candidate in kept],
+        "filtered_noise": [asdict(candidate) for candidate in filtered[:25]],
     }
+
+
+def yes_no(value: bool) -> str:
+    return "yes" if value else "no"
 
 
 def to_markdown(result: dict[str, Any]) -> str:
     lines = ["# reuse-scout search results", ""]
-    lines.append(f"Queries: {', '.join(result['queries'])}")
-    lines.append(f"Sources: {', '.join(result['sources'])}")
-    lines.append(f"Candidates: {result['kept_count']} kept, {result['filtered_noise_count']} filtered noise, {len(result['failures'])} source failures")
+    lines.append(f"Requested sources: {', '.join(result['requested_sources']) or 'none'}")
+    lines.append(f"Sources with completed queries: {', '.join(result['successful_sources']) or 'none'}")
+    lines.append(f"Incomplete sources: {', '.join(result['incomplete_sources']) or 'none'}")
+    lines.append(f"Coverage complete: {yes_no(result['coverage_complete'])}")
+    lines.append(f"Negative claim allowed: {yes_no(result['claim_allowed'])}")
+    if "github" in result["requested_sources"]:
+        lines.append(f"GitHub auth: {result['github_auth']}")
+    lines.append(
+        f"Candidates: {result['kept_count']} kept, "
+        f"{result['filtered_noise_count']} filtered noise, {len(result['failures'])} incomplete queries"
+    )
+
+    lines.extend(["", "## Source coverage", ""])
+    lines.append("| Source | Assigned | Completed | Results | Empty | Failed | Skipped | Complete |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
+    for source, summary in result["source_summary"].items():
+        lines.append(
+            f"| {source} | {summary['assigned']} | {summary['completed']} | "
+            f"{summary['with_results']} | {summary['empty']} | {summary['failed']} | "
+            f"{summary['skipped']} | {yes_no(summary['coverage_complete'])} |"
+        )
+
     if result["failures"]:
-        lines.extend(["", "## Source failures"])
+        lines.extend(["", "## Incomplete queries"])
         for failure in result["failures"]:
-            lines.append(f"- {failure['source']} / {failure['query']}: {failure['error']}")
+            detail = failure.get("error") or "not executed"
+            lines.append(f"- {failure['source']} / {failure['query']} / {failure['status']}: {detail}")
+
     lines.extend(["", "## Kept candidates", ""])
     lines.append("| Name | Source | Type | Signal | Description | URL |")
     lines.append("|---|---|---|---:|---|---|")
-    for c in result["candidates"]:
-        signal = c.get("stars") if c.get("stars") is not None else c.get("package_downloads_weekly") or ""
-        desc = (c.get("description") or "").replace("|", "\\|")[:180]
-        lines.append(f"| {c['name']} | {c['source']} | {c['candidate_type']} | {signal} | {desc} | {c['url']} |")
+    for candidate in result["candidates"]:
+        signal = candidate.get("stars") if candidate.get("stars") is not None else candidate.get("package_downloads_weekly") or ""
+        desc = (candidate.get("description") or "").replace("|", "\\|")[:180]
+        lines.append(
+            f"| {candidate['name']} | {candidate['source']} | {candidate['candidate_type']} | "
+            f"{signal} | {desc} | {candidate['url']} |"
+        )
     if result["filtered_noise"]:
         lines.extend(["", "## Filtered noise sample"])
-        for c in result["filtered_noise"][:10]:
-            note = "; ".join(c.get("hygiene_notes") or [])
-            lines.append(f"- {c['name']} ({c['source']}): {note}")
+        for candidate in result["filtered_noise"][:10]:
+            note = "; ".join(candidate.get("hygiene_notes") or [])
+            lines.append(f"- {candidate['name']} ({candidate['source']}): {note}")
     return "\n".join(lines) + "\n"
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Search public sources for reuse-scout candidate evidence.")
-    parser.add_argument("--query", action="append", required=True, help="Search query. Repeat for multiple queries.")
-    parser.add_argument("--source", action="append", choices=["github", "npm", "huggingface"], help="Source to search. Defaults to all supported sources.")
+    parser.add_argument("--query", action="append", help="Shared search query. Repeat for multiple queries.")
+    parser.add_argument("--github-query", action="append", help="Priority GitHub-only query. Runs before shared queries.")
+    parser.add_argument("--npm-query", action="append", help="Priority npm-only query. Runs before shared queries.")
+    parser.add_argument("--huggingface-query", action="append", help="Priority Hugging Face-only query. Runs before shared queries.")
+    parser.add_argument("--source", action="append", choices=["github", "npm", "huggingface"], help="Source to search.")
+    parser.add_argument("--required-source", action="append", choices=["github", "npm", "huggingface"], help="Source that must complete before a negative finding is allowed.")
+    parser.add_argument("--github-query-budget", type=int, help="Maximum GitHub queries for this run. Remaining queries are marked skipped_budget.")
     parser.add_argument("--limit", type=int, default=5, help="Max results per query per source.")
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not any([args.query, args.github_query, args.npm_query, args.huggingface_query]):
+        parser.error("provide at least one query")
+    if args.github_query_budget is not None and args.github_query_budget < 1:
+        parser.error("--github-query-budget must be at least 1")
+    return args
 
 
 def main(argv: list[str]) -> int:
@@ -295,8 +526,26 @@ def main(argv: list[str]) -> int:
         except Exception:
             pass
     args = parse_args(argv)
-    sources = args.source or ["github", "npm", "huggingface"]
-    result = run_search(args.query, sources, max(1, min(args.limit, 25)))
+    source_queries = {
+        "github": args.github_query or [],
+        "npm": args.npm_query or [],
+        "huggingface": args.huggingface_query or [],
+    }
+    if args.source:
+        sources = dedupe_strings(args.source)
+    elif args.query:
+        sources = ["github", "npm", "huggingface"]
+    else:
+        sources = [source for source, queries in source_queries.items() if queries]
+
+    result = run_search(
+        queries=args.query or [],
+        sources=sources,
+        limit=max(1, min(args.limit, 25)),
+        source_queries=source_queries,
+        required_sources=args.required_source,
+        github_query_budget=args.github_query_budget,
+    )
     if args.format == "markdown":
         sys.stdout.write(to_markdown(result))
     else:
@@ -304,8 +553,6 @@ def main(argv: list[str]) -> int:
         sys.stdout.write("\n")
     return 0
 
+
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
-
-
